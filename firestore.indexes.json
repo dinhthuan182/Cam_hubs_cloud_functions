@@ -1,0 +1,21 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "cameraEvents",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "cameraDeviceId", "order": "ASCENDING" },
+        { "fieldPath": "detectedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "cameraEvents",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "clipState", "order": "ASCENDING" },
+        { "fieldPath": "detectedAt", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

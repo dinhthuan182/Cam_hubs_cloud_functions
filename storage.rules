@@ -1,0 +1,23 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // ---------- /clips/{cameraDeviceId}/{file} (007 → 019/US5) ----------
+    // Clip media: only the owning camera device may write; camera ownership is verified
+    // against the Firestore device doc, mirroring isDeviceOwner() in firestore.rules.
+    // Read is server-gated to premium (019/US5, finding #4b): thumbnails (_thumb.jpg) stay
+    // open so the free clip library still renders locked previews, but the full .mp4
+    // playback requires the reader's server-written users/{uid}.premium == true. This is
+    // the un-forgeable backstop behind the client's clipIsBrowsable (premium-only) gate.
+    match /clips/{cameraDeviceId}/{file} {
+      allow read: if request.auth != null && (
+        file.matches('.*_thumb[.]jpg')
+        || (firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
+            && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.premium == true)
+      );
+      allow write: if request.auth != null &&
+        firestore.get(/databases/(default)/documents/devices/$(cameraDeviceId)).data.ownerUserId
+          == request.auth.uid;
+      allow delete: if false; // lifecycle rule only
+    }
+  }
+}

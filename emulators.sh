@@ -10,9 +10,12 @@ npm --prefix functions run build
 
 ARGS=(emulators:start --project "$PROJECT")
 
-if [[ "${PERSIST:-0}" == "1" ]]; then
+if [[ "${PERSIST:-1}" == "1" ]]; then
   mkdir -p "$DATA_DIR"
-  ARGS+=(--import "$DATA_DIR" --export-on-exit "$DATA_DIR")
+  ARGS+=(--export-on-exit "$DATA_DIR")
+  if [[ -f "$DATA_DIR/firebase-export-metadata.json" ]]; then
+    ARGS+=(--import "$DATA_DIR")
+  fi
 fi
 
 exec firebase "${ARGS[@]}"

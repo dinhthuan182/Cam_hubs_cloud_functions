@@ -13,8 +13,8 @@
     "deploy": "firebase deploy --only functions",
     "logs": "firebase functions:log --only onDetectionEvent",
     "test": "tsc --noEmit && node --test --import tsx test/clips.test.ts test/subscription.test.ts test/notification.test.ts test/sweepStaleSessions.test.ts test/reapExpiredClips.test.ts",
-    "test:rules": "firebase emulators:exec --only firestore \"node --test --import tsx test/rules.subscription.test.ts\"",
-    "test:functions": "GCLOUD_PROJECT=cam-hubs-fn-test firebase emulators:exec --project cam-hubs-fn-test --only firestore \"node --test --import tsx test/authorizeDetection.test.ts test/webhook.test.ts\""
+    "test:rules": "firebase emulators:exec --project cam-hubs-rules-test --only firestore,storage \"node --test --test-concurrency=1 --import tsx test/rules.subscription.test.ts test/rules.access.test.ts\"",
+    "test:functions": "GCLOUD_PROJECT=cam-hubs-fn-test firebase emulators:exec --project cam-hubs-fn-test --only firestore \"node --test --import tsx test/authorizeDetection.test.ts test/webhook.test.ts test/pairing.test.ts\""
   },
   "dependencies": {
     "firebase-admin": "^12.6.0",

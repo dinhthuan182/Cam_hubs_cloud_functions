@@ -99,6 +99,7 @@ test("a premium viewer paired with a free camera authorizes it, recording the vi
 });
 
 test("a null authorizer clears the recorded authorization", async () => {
+  await seedOwner("cam-revoke", "owner-revoke");
   await getFirestore()
     .collection("detectionSettings")
     .doc("cam-revoke")
@@ -111,4 +112,41 @@ test("a null authorizer clears the recorded authorization", async () => {
   const settings = await getFirestore().collection("detectionSettings").doc("cam-revoke").get();
   assert.equal(settings.get("detectionAuthorizedBy"), undefined);
   assert.equal(settings.get("motionDetectionEnabled"), true);
+});
+
+test("a paired user may clear the camera's authorization", async () => {
+  await getFirestore()
+    .collection("devices")
+    .doc("cam-revoke-paired")
+    .set({ ownerUserId: "owner-cam", editorUserIds: ["owner-paired-viewer"] });
+  await getFirestore()
+    .collection("detectionSettings")
+    .doc("cam-revoke-paired")
+    .set({ detectionAuthorizedBy: "cam-revoke-paired" });
+  const result = await fn.run({
+    auth: { uid: "owner-paired-viewer" },
+    data: { cameraDeviceId: "cam-revoke-paired", authorizerDeviceId: null },
+  });
+  assert.equal(result.authorized, false);
+});
+
+test("a stranger cannot clear another camera's authorization", async () => {
+  await seedOwner("cam-protected", "owner-protected");
+  await getFirestore()
+    .collection("detectionSettings")
+    .doc("cam-protected")
+    .set({ detectionAuthorizedBy: "cam-protected" });
+  await expectRejection(
+    fn.run({ auth: { uid: "stranger" }, data: { cameraDeviceId: "cam-protected", authorizerDeviceId: null } }),
+    "permission-denied"
+  );
+  const settings = await getFirestore().collection("detectionSettings").doc("cam-protected").get();
+  assert.equal(settings.get("detectionAuthorizedBy"), "cam-protected");
+});
+
+test("clearing authorization for a camera with no device doc is rejected", async () => {
+  await expectRejection(
+    fn.run({ auth: { uid: "anyone" }, data: { cameraDeviceId: "no-such-camera", authorizerDeviceId: null } }),
+    "permission-denied"
+  );
 });

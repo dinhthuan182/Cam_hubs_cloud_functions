@@ -9,6 +9,8 @@ import { getStorage } from "firebase-admin/storage";
 import { selectBodyLocKey, eligibleRecipientToken } from "./notification";
 import { sweepStaleSessions } from "./sweepStaleSessions";
 import { reapExpiredClips } from "./reapExpiredClips";
+import { pairWithToken as pairDevicesWithToken, PairWithTokenResult, recomputeEditors } from "./pairing";
+import { ownersNeedingPremiumSync, syncOwnerPremium } from "./userPremium";
 import {
   AdaptyWebhookEvent,
   SubscriptionRecord,
@@ -191,6 +193,11 @@ export const authorizeDetection = onCall(async (request): Promise<{ authorized: 
   const rawAuthorizer = data.authorizerDeviceId;
 
   if (rawAuthorizer === null || rawAuthorizer === undefined) {
+    const camera = await db.collection("devices").doc(cameraDeviceId).get();
+    const editors = (camera.get("editorUserIds") ?? []) as unknown[];
+    if (!camera.exists || (camera.get("ownerUserId") !== request.auth.uid && !editors.includes(request.auth.uid))) {
+      throw new HttpsError("permission-denied", "Caller is not the owner of, or paired with, the camera.");
+    }
     await settingsRef.set(
       {
         detectionAuthorizedBy: FieldValue.delete(),
@@ -236,34 +243,52 @@ export const authorizeDetection = onCall(async (request): Promise<{ authorized: 
 });
 
 export const syncPairingEditors = onDocumentWritten("pairings/{pairingId}", async (event) => {
+  const members = new Set<string>();
+  for (const snap of [event.data?.before, event.data?.after]) {
+    for (const member of (snap?.exists ? (snap.get("memberDeviceIds") ?? []) : []) as unknown[]) {
+      if (typeof member === "string" && member.length > 0) {
+        members.add(member);
+      }
+    }
+  }
+  await Promise.all(
+    [...members].map(async (deviceId) => {
+      try {
+        const editors = await recomputeEditors(db, deviceId);
+        logger.info(`syncPairingEditors: device=${deviceId} editors=${editors?.length ?? "missing"}`);
+      } catch (err) {
+        logger.warn(`syncPairingEditors: failed to update ${deviceId}`, err);
+      }
+    })
+  );
+});
+
+export const pairWithToken = onCall(async (request): Promise<PairWithTokenResult> => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Sign-in required to pair devices.");
+  }
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const deviceId = typeof data.deviceId === "string" ? data.deviceId.trim() : "";
+  const pairingToken = typeof data.pairingToken === "string" ? data.pairingToken.trim() : "";
+  if (deviceId.length === 0 || pairingToken.length === 0) {
+    throw new HttpsError("invalid-argument", "deviceId and pairingToken are required.");
+  }
+  const result = await pairDevicesWithToken(db, request.auth.uid, deviceId, pairingToken);
+  logger.info(`pairWithToken: device=${deviceId} paired with ${result.device.id} pairingId=${result.pairingId}`);
+  return result;
+});
+
+export const syncUserPremium = onDocumentWritten("devices/{deviceId}", async (event) => {
   const before = event.data?.before;
   const after = event.data?.after;
-  const members: string[] = ((after?.exists ? after.get("memberDeviceIds") : before?.get("memberDeviceIds")) ??
-    []) as string[];
-  if (members.length !== 2) {
-    return;
-  }
-
-  const isActive = Boolean(after?.exists) && after?.get("status") === "active";
-  const [deviceA, deviceB] = members;
-  const [ownerA, ownerB] = await Promise.all([deviceOwnerUid(deviceA), deviceOwnerUid(deviceB)]);
-
-  const applyEditor = async (targetDeviceId: string, editorUid: string | undefined) => {
-    if (!editorUid) {
-      return;
-    }
-    const value = isActive ? FieldValue.arrayUnion(editorUid) : FieldValue.arrayRemove(editorUid);
-    try {
-      await db.collection("devices").doc(targetDeviceId).update({ editorUserIds: value });
-    } catch (err) {
-      logger.warn(`syncPairingEditors: failed to update ${targetDeviceId}`, err);
-    }
-  };
-
-  await Promise.all([applyEditor(deviceA, ownerB), applyEditor(deviceB, ownerA)]);
-  logger.info(
-    `syncPairingEditors: ${isActive ? "granted" : "revoked"} editor access between ${deviceA} and ${deviceB}`
+  const owners = ownersNeedingPremiumSync(
+    before?.exists ? before.data() : undefined,
+    after?.exists ? after.data() : undefined
   );
+  for (const owner of owners) {
+    const premium = await syncOwnerPremium(db, owner);
+    logger.info(`syncUserPremium: user=${owner} premium=${premium}`);
+  }
 });
 
 const FREE_PAIRING_CAP = 2;

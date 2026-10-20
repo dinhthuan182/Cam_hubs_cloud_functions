@@ -8,35 +8,46 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function deviceData(deviceId) {
+      return get(/databases/$(database)/documents/devices/$(deviceId)).data;
+    }
+
     // ownerUserId on a device doc is the device owner's anonymous-auth uid.
     // deviceId (the doc id) is a separate, locally-generated UUID — they are NOT equal,
     // so membership can only be verified by dereferencing the device doc's ownerUserId.
     function isDeviceOwner(deviceId) {
-      return isSignedIn() &&
-        get(/databases/$(database)/documents/devices/$(deviceId)).data.ownerUserId == request.auth.uid;
+      return isSignedIn() && deviceData(deviceId).ownerUserId == request.auth.uid;
+    }
+
+    function canAccessDevice(deviceId) {
+      let device = deviceData(deviceId);
+      return isSignedIn() && (
+        device.ownerUserId == request.auth.uid ||
+        request.auth.uid in device.get('editorUserIds', [])
+      );
+    }
+
+    function sessionCameraId(sessionId) {
+      return get(/databases/$(database)/documents/signalingSessions/$(sessionId)).data.cameraDeviceId;
     }
 
     // ---------- /devices/{deviceId} ----------
     match /devices/{deviceId} {
-      // Reads are scoped at the app layer (callers only read device IDs they already
-      // know from their pairings; the pairing-bootstrap token lookup must read a
-      // not-yet-paired device). Rules cannot recompute the SHA-256 pairing id, so a
-      // per-pairing read gate is not expressible here — same app-layer-scoping stance
-      // as /signalingSessions and /cameraEvents below.
-      // NOTE: the device doc also holds `pairingToken` and `fcmToken`; tightening this
-      // to owner + paired-peers requires denormalising allowed-reader uids onto the doc
-      // (see follow-up). Until then any signed-in device can read device docs.
-      allow read: if isSignedIn();
+      allow read: if isSignedIn() && (
+        resource == null ||
+        resource.data.ownerUserId == request.auth.uid ||
+        request.auth.uid in resource.data.get('editorUserIds', [])
+      );
 
       // Only the owner may create or mutate their own device document.
       allow create: if isSignedIn() &&
         request.resource.data.ownerUserId == request.auth.uid &&
-        !request.resource.data.keys().hasAny(['premiumActive']);
+        !request.resource.data.keys().hasAny(['premiumActive', 'editorUserIds']);
 
       allow update: if isSignedIn() && (
         (resource.data.ownerUserId == request.auth.uid &&
          request.resource.data.ownerUserId == resource.data.ownerUserId &&
-         !request.resource.data.diff(resource.data).affectedKeys().hasAny(['premiumActive']))
+         !request.resource.data.diff(resource.data).affectedKeys().hasAny(['premiumActive', 'editorUserIds']))
         ||
         (request.auth.uid in resource.data.get('editorUserIds', []) &&
          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName']))
@@ -47,39 +58,33 @@ service cloud.firestore {
 
     // ---------- /pairings/{pairingId} ----------
     match /pairings/{pairingId} {
-      // App-layer scoped read: the paired-devices listener queries by its own
-      // memberDeviceIds, so callers only ever see pairings they belong to.
       allow read: if isSignedIn();
 
-      // Creation: the caller must own one of the two member devices.
-      allow create: if isSignedIn() &&
-        (isDeviceOwner(request.resource.data.deviceA) ||
-         isDeviceOwner(request.resource.data.deviceB)) &&
-        request.resource.data.status == 'active';
+      allow create: if false;
 
-      // Update (unpair / idempotent re-activate): a member may flip status but may not
-      // rewrite the membership (deviceA/deviceB are pinned to their existing values).
       allow update: if isSignedIn() &&
         (isDeviceOwner(resource.data.deviceA) ||
          isDeviceOwner(resource.data.deviceB)) &&
-        request.resource.data.deviceA == resource.data.deviceA &&
-        request.resource.data.deviceB == resource.data.deviceB &&
-        request.resource.data.status in ['active', 'removed'];
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) &&
+        request.resource.data.status == 'removed';
 
       allow delete: if false;
     }
 
     // ---------- /signalingSessions/{sessionId} ----------
     match /signalingSessions/{sessionId} {
-      // Only the owning camera device may write; paired viewers may read
-      allow read: if isSignedIn();
+      allow read: if isSignedIn() && (
+        resource == null ||
+        canAccessDevice(resource.data.cameraDeviceId)
+      );
       allow create: if isSignedIn() &&
         request.resource.data.cameraDeviceId != null &&
         isDeviceOwner(request.resource.data.cameraDeviceId);
       // 009: the periodic `lastHeartbeatAt` refresh is a field update by the same owning camera, so it
       // is already covered by this owner-only update rule — no rule change required (FR-004).
       allow update: if isSignedIn() &&
-        isDeviceOwner(resource.data.cameraDeviceId);
+        isDeviceOwner(resource.data.cameraDeviceId) &&
+        request.resource.data.cameraDeviceId == resource.data.cameraDeviceId;
       allow delete: if isSignedIn() &&
         isDeviceOwner(resource.data.cameraDeviceId);
     }
@@ -87,18 +92,25 @@ service cloud.firestore {
     // ---------- /signalingConnections/{connectionId} ----------
     // connectionId format: {sessionId}_{viewerDeviceId}
     match /signalingConnections/{connectionId} {
-      // Both camera and viewer may read
-      allow read: if isSignedIn();
+      allow read: if isSignedIn() && (
+        resource == null ||
+        isDeviceOwner(sessionCameraId(resource.data.sessionId)) ||
+        isDeviceOwner(resource.data.viewerDeviceId) ||
+        isDeviceOwner(resource.data.cameraDeviceId)
+      );
       // Viewer creates the connection document. viewerUserId must equal the
       // authenticated creator's uid so the broadcaster reads a truthful subscription key.
       allow create: if isSignedIn() &&
-        request.resource.data.viewerDeviceId != null &&
-        request.resource.data.viewerUserId == request.auth.uid;
+        request.resource.data.viewerUserId == request.auth.uid &&
+        isDeviceOwner(request.resource.data.viewerDeviceId) &&
+        request.resource.data.cameraDeviceId == sessionCameraId(request.resource.data.sessionId) &&
+        canAccessDevice(request.resource.data.cameraDeviceId);
       // Camera writes offer + cameraIceCandidates; viewer writes answer + viewerIceCandidates
-      allow update: if isSignedIn() && (
-        isDeviceOwner(resource.data.cameraDeviceId) ||
-        isDeviceOwner(resource.data.viewerDeviceId)
-      );
+      allow update: if isSignedIn() &&
+        (isDeviceOwner(resource.data.cameraDeviceId) ||
+         isDeviceOwner(resource.data.viewerDeviceId)) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(
+          ['connectionId', 'sessionId', 'cameraDeviceId', 'viewerDeviceId', 'viewerUserId']);
       allow delete: if isSignedIn() &&
         isDeviceOwner(resource.data.cameraDeviceId);
     }
@@ -114,23 +126,18 @@ service cloud.firestore {
       allow create: if isSignedIn() &&
         request.resource.data.cameraDeviceId != null &&
         isDeviceOwner(request.resource.data.cameraDeviceId);
-      // Paired viewers read by querying their known camera IDs (app-layer scoped).
-      allow read: if isSignedIn();
-      // Update is allowed in exactly two shapes, and NEVER touches the immutable event core:
-      //  1. The owning camera advances the clip lifecycle (recording → uploading →
-      //     available/unavailable). The event-core keys must be unaffected by the diff, so the
-      //     tamper-proof detection record is preserved even though the doc is now mutable.
-      //  2. Clip Timeline & Library (011, US4): any signed-in paired viewer flips ONLY the
-      //     `favorite` field. The diff is field-scoped to `{favorite}`, so the camera-owned
-      //     lifecycle and event core can never be touched by a non-owner.
-      //     (Per-pairing scoping is enforced at the app layer, like the read above.)
+      allow read: if isSignedIn() && (
+        resource == null ||
+        canAccessDevice(resource.data.cameraDeviceId)
+      );
       allow update: if isSignedIn() && (
         (isDeviceOwner(resource.data.cameraDeviceId) &&
           request.resource.data.cameraDeviceId == resource.data.cameraDeviceId &&
           !request.resource.data.diff(resource.data).affectedKeys().hasAny(
             ['cameraDeviceId', 'eventType', 'detectedAt', 'sensitivityLevel', 'category', 'ttlExpiry']))
         ||
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['favorite'])
+        (canAccessDevice(resource.data.cameraDeviceId) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['favorite']))
       );
       // Clients cannot delete the record; the `deleteClips` callable (Admin SDK, 011/US6) clears the
       // clip fields, and the Firestore TTL policy on `ttlExpiry` handles expiry.
@@ -139,18 +146,10 @@ service cloud.firestore {
 
     // ---------- /detectionSettings/{cameraDeviceId} (006 → 008) ----------
     match /detectionSettings/{cameraDeviceId} {
-      // 006: a camera owns its own detection settings.
-      // 008 / FR-013: any *paired viewer* may also view and configure a camera's Smart Detection
-      // (which categories notify, the activity zone, sensitivity). Firestore rules cannot recompute
-      // the SHA-256 pairing id (see the /devices note above) to verify the pairing from inside the
-      // rule, so — consistent with the app-layer-scoped stance already used for /cameraEvents
-      // reads — access is gated on auth here and scoped to the caller's known cameras at the
-      // app layer. Tightening to a verified per-pairing predicate is the shared follow-up tracked for
-      // /cameraEvents (denormalise allowed-writer uids onto the doc).
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() &&
+      allow read: if canAccessDevice(cameraDeviceId);
+      allow create: if canAccessDevice(cameraDeviceId) &&
         !request.resource.data.keys().hasAny(['detectionAuthorizedBy', 'detectionAuthorizedAt']);
-      allow update: if isSignedIn() &&
+      allow update: if canAccessDevice(cameraDeviceId) &&
         !request.resource.data.diff(resource.data)
           .affectedKeys().hasAny(['detectionAuthorizedBy', 'detectionAuthorizedAt']);
       allow delete: if false;

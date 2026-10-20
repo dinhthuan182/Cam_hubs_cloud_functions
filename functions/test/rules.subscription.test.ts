@@ -39,6 +39,7 @@ beforeEach(async () => {
       displayName: "Front Door",
       premiumActive: false,
     });
+    await setDoc(doc(db, "devices", "camera-new"), { ownerUserId: OWNER, displayName: "New Camera" });
     await setDoc(doc(db, "subscriptions", DEVICE), {
       premium: true,
       status: "active",

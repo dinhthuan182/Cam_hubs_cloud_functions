@@ -115,6 +115,39 @@ service cloud.firestore {
         isDeviceOwner(resource.data.cameraDeviceId);
     }
 
+    match /talkLinks/{linkId} {
+      allow read: if isSignedIn() && (
+        resource == null ||
+        isDeviceOwner(resource.data.talkerDeviceId) ||
+        isDeviceOwner(resource.data.watcherDeviceId) ||
+        isDeviceOwner(resource.data.cameraDeviceId)
+      );
+      allow create: if isSignedIn() &&
+        isDeviceOwner(request.resource.data.watcherDeviceId) &&
+        canAccessDevice(request.resource.data.cameraDeviceId) &&
+        request.resource.data.cameraDeviceId == sessionCameraId(request.resource.data.sessionId) &&
+        request.resource.data.talkerDeviceId != request.resource.data.watcherDeviceId &&
+        request.resource.data.talkerDeviceId in get(/databases/$(database)/documents/signalingSessions/$(request.resource.data.sessionId)).data.get('talkBackTalkers', {}).keys() &&
+        request.resource.data.linkId ==
+          request.resource.data.sessionId + '_' + request.resource.data.talkerDeviceId + '_' + request.resource.data.watcherDeviceId &&
+        linkId == request.resource.data.linkId &&
+        request.resource.data.status == 'waiting' &&
+        !('answer' in request.resource.data) &&
+        request.resource.data.get('talkerIceCandidates', []).size() == 0;
+      allow update: if isSignedIn() &&
+        (isDeviceOwner(resource.data.talkerDeviceId) ||
+         (isDeviceOwner(resource.data.watcherDeviceId) &&
+          canAccessDevice(resource.data.cameraDeviceId))) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(
+          ['linkId', 'sessionId', 'cameraDeviceId', 'talkerDeviceId', 'watcherDeviceId']);
+      allow delete: if isSignedIn() && (
+        resource == null ||
+        isDeviceOwner(resource.data.talkerDeviceId) ||
+        isDeviceOwner(resource.data.watcherDeviceId) ||
+        isDeviceOwner(resource.data.cameraDeviceId)
+      );
+    }
+
     // ---------- /cameraEvents/{eventId} (006 → 007 merged) ----------
     // The detection record AND its clip metadata now share one doc (the clip↔event collections were
     // merged; doc id = event id). The event core (cameraDeviceId, eventType, detectedAt,

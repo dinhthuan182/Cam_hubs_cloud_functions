@@ -25,7 +25,11 @@ function sessionDoc(id: string, fields: Record<string, unknown>): FakeDoc {
   return { id, ref: { path: `signalingSessions/${id}` }, get: (f) => fields[f] };
 }
 
-function fakeDb(sessions: FakeDoc[], sink: WriteOp[]): Firestore {
+function talkLinkDoc(id: string, sessionId: string): FakeDoc {
+  return { id, ref: { path: `talkLinks/${id}` }, get: (f) => ({ sessionId })[f as "sessionId"] };
+}
+
+function fakeDb(sessions: FakeDoc[], sink: WriteOp[], talkLinks: FakeDoc[] = []): Firestore {
   const autoId = { n: 0 };
   const collection = (name: string) => {
     const filters: Array<{ field: string; op: string; val: unknown }> = [];
@@ -35,7 +39,7 @@ function fakeDb(sessions: FakeDoc[], sink: WriteOp[]): Firestore {
         return api;
       },
       async get() {
-        let docs = name === "signalingSessions" ? sessions : [];
+        let docs = name === "signalingSessions" ? sessions : name === "talkLinks" ? talkLinks : [];
         for (const f of filters) {
           docs = docs.filter((d) => {
             const v = d.get(f.field);
@@ -147,4 +151,31 @@ test("a stale session without a cameraDeviceId is still reaped but writes no liv
   assert.equal(result.liveEndedEvents, 0);
   assert.equal(result.clearedDevices, 0);
   assert.ok(!sink.some((op) => op.path.startsWith("cameraEvents/")));
+});
+
+test("a stale session's talk links are deleted with it", async () => {
+  const sessions = [
+    sessionDoc("s1", {
+      status: "live",
+      cameraDeviceId: "cam-1",
+      lastHeartbeatAt: Timestamp.fromMillis(NOW - (SWEEP_THRESHOLD_MS + 10_000)),
+    }),
+    sessionDoc("fresh", {
+      status: "live",
+      cameraDeviceId: "cam-2",
+      lastHeartbeatAt: Timestamp.fromMillis(NOW),
+    }),
+  ];
+  const talkLinks = [
+    talkLinkDoc("s1_t_w1", "s1"),
+    talkLinkDoc("s1_t_w2", "s1"),
+    talkLinkDoc("fresh_t_w1", "fresh"),
+  ];
+  const sink: WriteOp[] = [];
+  await sweepStaleSessions(fakeDb(sessions, sink, talkLinks), { dryRun: false, now: NOW });
+
+  const deleted = sink.filter((op) => op.type === "delete").map((op) => op.path);
+  assert.ok(deleted.includes("talkLinks/s1_t_w1"));
+  assert.ok(deleted.includes("talkLinks/s1_t_w2"));
+  assert.ok(!deleted.includes("talkLinks/fresh_t_w1"));
 });

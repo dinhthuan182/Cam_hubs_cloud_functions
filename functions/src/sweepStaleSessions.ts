@@ -88,8 +88,13 @@ export async function sweepStaleSessions(
         .collection("signalingConnections")
         .where("sessionId", "==", detail.sessionId)
         .get();
+      const talkLinkSnap = await db
+        .collection("talkLinks")
+        .where("sessionId", "==", detail.sessionId)
+        .get();
       const batch = db.batch();
       for (const c of connSnap.docs) batch.delete(c.ref);
+      for (const l of talkLinkSnap.docs) batch.delete(l.ref);
       batch.delete(db.collection("signalingSessions").doc(detail.sessionId));
       if (detail.cameraDeviceId) {
         const endedAt = detail.endedAt ?? Timestamp.fromMillis(options.now);

@@ -11,6 +11,7 @@ import { sweepStaleSessions } from "./sweepStaleSessions";
 import { reapExpiredClips } from "./reapExpiredClips";
 import { pairWithToken as pairDevicesWithToken, PairWithTokenResult, recomputeEditors } from "./pairing";
 import { ownersNeedingPremiumSync, syncOwnerPremium } from "./userPremium";
+import { ICE_SERVER_TTL_SECONDS, IceServer, generateCloudflareIceServers } from "./iceServers";
 import {
   AdaptyWebhookEvent,
   SubscriptionRecord,
@@ -277,6 +278,24 @@ export const pairWithToken = onCall(async (request): Promise<PairWithTokenResult
   logger.info(`pairWithToken: device=${deviceId} paired with ${result.device.id} pairingId=${result.pairingId}`);
   return result;
 });
+
+export const getIceServers = onCall(
+  async (request): Promise<{ iceServers: IceServer[]; ttlSeconds: number }> => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Sign-in required to fetch ICE servers.");
+    }
+    try {
+      const iceServers = await generateCloudflareIceServers(
+        process.env.CLOUDFLARE_TURN_KEY_ID,
+        process.env.CLOUDFLARE_TURN_API_TOKEN
+      );
+      return { iceServers, ttlSeconds: ICE_SERVER_TTL_SECONDS };
+    } catch (err) {
+      logger.error("getIceServers: Cloudflare TURN credentials unavailable", err);
+      throw new HttpsError("unavailable", "TURN credentials are temporarily unavailable.");
+    }
+  }
+);
 
 export const syncUserPremium = onDocumentWritten("devices/{deviceId}", async (event) => {
   const before = event.data?.before;

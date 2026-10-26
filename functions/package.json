@@ -4,7 +4,7 @@
   "private": true,
   "main": "lib/index.js",
   "engines": {
-    "node": "20"
+    "node": "22"
   },
   "scripts": {
     "build": "tsc",
@@ -17,8 +17,8 @@
     "test:functions": "GCLOUD_PROJECT=cam-hubs-fn-test firebase emulators:exec --project cam-hubs-fn-test --only firestore \"node --test --import tsx test/authorizeDetection.test.ts test/webhook.test.ts test/pairing.test.ts test/getIceServers.test.ts\""
   },
   "dependencies": {
-    "firebase-admin": "^12.6.0",
-    "firebase-functions": "^5.1.1"
+    "firebase-admin": "^14.5.0",
+    "firebase-functions": "^7.4.0"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^3.0.4",

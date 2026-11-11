@@ -264,6 +264,19 @@ export const syncPairingEditors = onDocumentWritten("pairings/{pairingId}", asyn
   );
 });
 
+export const syncHostedCameraEditors = onDocumentCreated("devices/{deviceId}", async (event) => {
+  const snap = event.data;
+  const hostDeviceId = snap?.get("hostDeviceId");
+  if (!snap || typeof hostDeviceId !== "string" || hostDeviceId.length === 0) {
+    return;
+  }
+  const hubSnap = await db.collection("devices").doc(hostDeviceId).get();
+  const hubEditors = hubSnap.get("editorUserIds");
+  const editors = Array.isArray(hubEditors) ? hubEditors.filter((uid): uid is string => typeof uid === "string") : [];
+  await snap.ref.update({ editorUserIds: editors });
+  logger.info(`syncHostedCameraEditors: camera=${event.params.deviceId} hub=${hostDeviceId} editors=${editors.length}`);
+});
+
 export const pairWithToken = onCall(async (request): Promise<PairWithTokenResult> => {
   if (!request.auth) {
     throw new HttpsError("unauthenticated", "Sign-in required to pair devices.");

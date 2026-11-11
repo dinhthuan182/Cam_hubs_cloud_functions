@@ -89,7 +89,7 @@ export async function recomputeEditors(db: Firestore, deviceId: string): Promise
     .where("memberDeviceIds", "array-contains", deviceId)
     .where("status", "==", "active");
 
-  return db.runTransaction(async (tx) => {
+  const editors = await db.runTransaction(async (tx) => {
     const [deviceSnap, pairingsSnap] = await Promise.all([tx.get(deviceRef), tx.get(activePairings)]);
     if (!deviceSnap.exists) {
       return undefined;
@@ -113,4 +113,25 @@ export async function recomputeEditors(db: Firestore, deviceId: string): Promise
     tx.update(deviceRef, { editorUserIds: editors });
     return editors;
   });
+  if (editors !== undefined) {
+    await mirrorEditorsToHostedCameras(db, deviceId, editors);
+  }
+  return editors;
+}
+
+export async function mirrorEditorsToHostedCameras(
+  db: Firestore,
+  hostDeviceId: string,
+  editors: string[]
+): Promise<number> {
+  const hosted = await db.collection("devices").where("hostDeviceId", "==", hostDeviceId).get();
+  const batchLimit = 400;
+  for (let start = 0; start < hosted.docs.length; start += batchLimit) {
+    const batch = db.batch();
+    for (const doc of hosted.docs.slice(start, start + batchLimit)) {
+      batch.update(doc.ref, { editorUserIds: editors });
+    }
+    await batch.commit();
+  }
+  return hosted.size;
 }

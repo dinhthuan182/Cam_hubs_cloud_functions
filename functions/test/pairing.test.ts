@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { getFirestore } from "firebase-admin/firestore";
-import { pairWithToken } from "../src/index";
+import { pairWithToken, syncHostedCameraEditors } from "../src/index";
 import { pairingIdFor, recomputeEditors } from "../src/pairing";
 import { ownersNeedingPremiumSync, syncOwnerPremium } from "../src/userPremium";
 
@@ -152,6 +152,72 @@ test("recomputeEditors clears editors when no pairing is active and skips missin
   assert.deepEqual(await recomputeEditors(getFirestore(), camera), []);
   assert.deepEqual(await deviceField(camera, "editorUserIds"), []);
   assert.equal(await recomputeEditors(getFirestore(), uniq("missing")), undefined);
+});
+
+async function seedHubWithViewer() {
+  const hub = uniq("hub");
+  const viewer = uniq("viewer");
+  const viewerOwner = uniq("uid-viewer");
+  await seedDevice(hub, uniq("uid-hub"));
+  await seedDevice(viewer, viewerOwner);
+  await getFirestore()
+    .collection("pairings")
+    .doc(pairingIdFor(hub, viewer))
+    .set({ memberDeviceIds: [hub, viewer], status: "active" });
+  return { hub, viewer, viewerOwner };
+}
+
+async function seedHostedCamera(id: string, hostDeviceId: string, extra: Record<string, unknown> = {}) {
+  await seedDevice(id, uniq("uid-hub"), { platform: "ipCamera", hostDeviceId, ...extra });
+}
+
+test("recomputeEditors mirrors the hub's editors onto its hosted cameras", async () => {
+  const { hub, viewerOwner } = await seedHubWithViewer();
+  const camera = uniq("ipcam");
+  await seedHostedCamera(camera, hub);
+
+  await recomputeEditors(getFirestore(), hub);
+
+  assert.deepEqual(await deviceField(camera, "editorUserIds"), [viewerOwner]);
+});
+
+test("unpairing clears hosted camera editors", async () => {
+  const { hub, viewer, viewerOwner } = await seedHubWithViewer();
+  const camera = uniq("ipcam");
+  await seedHostedCamera(camera, hub);
+  await recomputeEditors(getFirestore(), hub);
+  assert.deepEqual(await deviceField(camera, "editorUserIds"), [viewerOwner]);
+
+  await getFirestore().collection("pairings").doc(pairingIdFor(hub, viewer)).update({ status: "removed" });
+  await recomputeEditors(getFirestore(), hub);
+
+  assert.deepEqual(await deviceField(camera, "editorUserIds"), []);
+});
+
+test("hosted camera created after pairing gets editors", async () => {
+  const { hub, viewerOwner } = await seedHubWithViewer();
+  await recomputeEditors(getFirestore(), hub);
+  const camera = uniq("ipcam");
+  await seedHostedCamera(camera, hub);
+  assert.equal(await deviceField(camera, "editorUserIds"), undefined);
+
+  const snapshot = await getFirestore().collection("devices").doc(camera).get();
+  const handler = syncHostedCameraEditors as unknown as {
+    run: (event: { data: unknown; params: { deviceId: string } }) => Promise<void>;
+  };
+  await handler.run({ data: snapshot, params: { deviceId: camera } });
+
+  assert.deepEqual(await deviceField(camera, "editorUserIds"), [viewerOwner]);
+});
+
+test("cameras of other hubs are untouched", async () => {
+  const { hub } = await seedHubWithViewer();
+  const other = uniq("ipcam-other");
+  await seedHostedCamera(other, uniq("other-hub"), { editorUserIds: ["keep-me"] });
+
+  await recomputeEditors(getFirestore(), hub);
+
+  assert.deepEqual(await deviceField(other, "editorUserIds"), ["keep-me"]);
 });
 
 test("ownersNeedingPremiumSync only reacts to premium or owner changes", () => {

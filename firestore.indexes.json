@@ -15,7 +15,23 @@
         { "fieldPath": "clipState", "order": "ASCENDING" },
         { "fieldPath": "detectedAt", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "devices",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "editorUserIds", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "platform", "order": "ASCENDING" }
+      ]
     }
   ],
-  "fieldOverrides": []
+  "fieldOverrides": [
+    {
+      "collectionGroup": "devices",
+      "fieldPath": "hostDeviceId",
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION" }
+      ]
+    }
+  ]
 }

@@ -98,6 +98,39 @@ test("a premium viewer paired with a free camera authorizes it, recording the vi
   assert.equal(settings.get("detectionAuthorizedBy"), "viewer-premium");
 });
 
+test("a premium viewer paired with the hub of a hosted camera authorizes it", async () => {
+  await seedOwner("hub-hosted", "owner-hub-hosted");
+  await seedOwner("viewer-hosted", "owner-viewer-hosted");
+  await seedPremium("viewer-hosted", true);
+  await seedPairing("pair-hosted", ["hub-hosted", "viewer-hosted"]);
+  await getFirestore()
+    .collection("devices")
+    .doc("ipcam-hosted")
+    .set({ ownerUserId: "owner-hub-hosted", platform: "ipCamera", hostDeviceId: "hub-hosted" });
+  const result = await fn.run({
+    auth: { uid: "owner-viewer-hosted" },
+    data: { cameraDeviceId: "ipcam-hosted", authorizerDeviceId: "viewer-hosted" },
+  });
+  assert.deepEqual(result, { authorized: true });
+});
+
+test("a premium viewer not paired with the hub of a hosted camera is rejected", async () => {
+  await seedOwner("hub-hosted-2", "owner-hub-hosted-2");
+  await seedOwner("viewer-stranger", "owner-viewer-stranger");
+  await seedPremium("viewer-stranger", true);
+  await getFirestore()
+    .collection("devices")
+    .doc("ipcam-hosted-2")
+    .set({ ownerUserId: "owner-hub-hosted-2", platform: "ipCamera", hostDeviceId: "hub-hosted-2" });
+  await expectRejection(
+    fn.run({
+      auth: { uid: "owner-viewer-stranger" },
+      data: { cameraDeviceId: "ipcam-hosted-2", authorizerDeviceId: "viewer-stranger" },
+    }),
+    "permission-denied"
+  );
+});
+
 test("a null authorizer clears the recorded authorization", async () => {
   await seedOwner("cam-revoke", "owner-revoke");
   await getFirestore()

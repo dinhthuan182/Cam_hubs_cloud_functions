@@ -31,6 +31,18 @@ interface DetectionEventData {
   snapshotUrl?: string;
 }
 
+export async function pairingPeerOf(cameraDeviceId: string): Promise<string> {
+  const cameraSnap = await db.collection("devices").doc(cameraDeviceId).get();
+  const hostDeviceId = cameraSnap.get("hostDeviceId");
+  const cameraOwner = cameraSnap.get("ownerUserId");
+  if (typeof hostDeviceId !== "string" || hostDeviceId.length === 0) return cameraDeviceId;
+  const hubSnap = await db.collection("devices").doc(hostDeviceId).get();
+  if (!hubSnap.exists || typeof cameraOwner !== "string" || hubSnap.get("ownerUserId") !== cameraOwner) {
+    return cameraDeviceId;
+  }
+  return hostDeviceId;
+}
+
 export const onDetectionEvent = onDocumentCreated(
   "cameraEvents/{eventId}",
   async (event) => {
@@ -53,9 +65,10 @@ export const onDetectionEvent = onDocumentCreated(
       return;
     }
 
+    const pairingPeerId = await pairingPeerOf(cameraDeviceId);
     const pairingsSnap = await db
       .collection("pairings")
-      .where("memberDeviceIds", "array-contains", cameraDeviceId)
+      .where("memberDeviceIds", "array-contains", pairingPeerId)
       .where("status", "==", "active")
       .get();
 
@@ -63,7 +76,7 @@ export const onDetectionEvent = onDocumentCreated(
     for (const doc of pairingsSnap.docs) {
       const members: string[] = doc.get("memberDeviceIds") ?? [];
       for (const id of members) {
-        if (id !== cameraDeviceId) viewerIds.add(id);
+        if (id !== pairingPeerId && id !== cameraDeviceId) viewerIds.add(id);
       }
     }
     if (viewerIds.size === 0) {
@@ -226,7 +239,7 @@ export const authorizeDetection = onCall(async (request): Promise<{ authorized: 
   }
 
   if (authorizerDeviceId !== cameraDeviceId) {
-    const paired = await devicesArePaired(authorizerDeviceId, cameraDeviceId);
+    const paired = await devicesArePaired(authorizerDeviceId, await pairingPeerOf(cameraDeviceId));
     if (!paired) {
       throw new HttpsError("permission-denied", "Authorizing device is not paired with the camera.");
     }

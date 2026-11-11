@@ -42,12 +42,14 @@ service cloud.firestore {
       // Only the owner may create or mutate their own device document.
       allow create: if isSignedIn() &&
         request.resource.data.ownerUserId == request.auth.uid &&
-        !request.resource.data.keys().hasAny(['premiumActive', 'editorUserIds']);
+        !request.resource.data.keys().hasAny(['premiumActive', 'editorUserIds']) &&
+        (!request.resource.data.keys().hasAny(['hostDeviceId']) ||
+         get(/databases/$(database)/documents/devices/$(request.resource.data.hostDeviceId)).data.ownerUserId == request.auth.uid);
 
       allow update: if isSignedIn() && (
         (resource.data.ownerUserId == request.auth.uid &&
          request.resource.data.ownerUserId == resource.data.ownerUserId &&
-         !request.resource.data.diff(resource.data).affectedKeys().hasAny(['premiumActive', 'editorUserIds']))
+         !request.resource.data.diff(resource.data).affectedKeys().hasAny(['premiumActive', 'editorUserIds', 'hostDeviceId']))
         ||
         (request.auth.uid in resource.data.get('editorUserIds', []) &&
          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName']))

@@ -174,6 +174,16 @@ describe("devices", () => {
     );
   });
 
+  test("hostDeviceId must name a hub the creator owns and is immutable afterwards", async () => {
+    const shape = { ownerUserId: STRANGER, displayName: "Forged", platform: "ipCamera" };
+    await assertFails(setDoc(doc(db(STRANGER), "devices", "ipcam-forged"), { ...shape, hostDeviceId: CAM }));
+    await assertFails(setDoc(doc(db(STRANGER), "devices", "ipcam-orphan"), { ...shape, hostDeviceId: "no-such-hub" }));
+    await assertSucceeds(setDoc(doc(db(STRANGER), "devices", "ipcam-own"), { ...shape, hostDeviceId: STRANGER_DEV }));
+    await assertFails(updateDoc(doc(db(STRANGER), "devices", "ipcam-own"), { hostDeviceId: STRANGER_DEV2 }));
+    await assertSucceeds(setDoc(doc(db(STRANGER), "devices", "plain"), shape));
+    await assertFails(updateDoc(doc(db(STRANGER), "devices", "plain"), { hostDeviceId: STRANGER_DEV }));
+  });
+
   test("a stranger cannot read a device doc or list devices", async () => {
     await assertFails(getDoc(doc(db(STRANGER), "devices", CAM)));
     await assertFails(getDocs(collection(db(STRANGER), "devices")));

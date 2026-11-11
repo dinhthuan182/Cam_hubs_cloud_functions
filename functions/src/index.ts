@@ -271,6 +271,10 @@ export const syncHostedCameraEditors = onDocumentCreated("devices/{deviceId}", a
     return;
   }
   const hubSnap = await db.collection("devices").doc(hostDeviceId).get();
+  const hubOwner = hubSnap.get("ownerUserId");
+  if (typeof hubOwner !== "string" || hubOwner.length === 0 || snap.get("ownerUserId") !== hubOwner) {
+    return;
+  }
   const hubEditors = hubSnap.get("editorUserIds");
   const editors = Array.isArray(hubEditors) ? hubEditors.filter((uid): uid is string => typeof uid === "string") : [];
   await snap.ref.update({ editorUserIds: editors });

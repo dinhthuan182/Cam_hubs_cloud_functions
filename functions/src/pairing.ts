@@ -124,14 +124,19 @@ export async function mirrorEditorsToHostedCameras(
   hostDeviceId: string,
   editors: string[]
 ): Promise<number> {
+  const hubOwner = (await db.collection("devices").doc(hostDeviceId).get()).get("ownerUserId");
+  if (typeof hubOwner !== "string" || hubOwner.length === 0) {
+    return 0;
+  }
   const hosted = await db.collection("devices").where("hostDeviceId", "==", hostDeviceId).get();
+  const owned = hosted.docs.filter((doc) => doc.get("ownerUserId") === hubOwner);
   const batchLimit = 400;
-  for (let start = 0; start < hosted.docs.length; start += batchLimit) {
+  for (let start = 0; start < owned.length; start += batchLimit) {
     const batch = db.batch();
-    for (const doc of hosted.docs.slice(start, start + batchLimit)) {
+    for (const doc of owned.slice(start, start + batchLimit)) {
       batch.update(doc.ref, { editorUserIds: editors });
     }
     await batch.commit();
   }
-  return hosted.size;
+  return owned.length;
 }

@@ -131,6 +131,24 @@ test("a premium viewer not paired with the hub of a hosted camera is rejected", 
   );
 });
 
+test("a premium viewer paired with a hub of another owner cannot authorize a camera naming that hub", async () => {
+  await seedOwner("hub-foreign", "owner-hub-foreign");
+  await seedOwner("viewer-foreign", "owner-viewer-foreign");
+  await seedPremium("viewer-foreign", true);
+  await seedPairing("pair-foreign", ["hub-foreign", "viewer-foreign"]);
+  await getFirestore()
+    .collection("devices")
+    .doc("ipcam-foreign")
+    .set({ ownerUserId: "owner-attacker", platform: "ipCamera", hostDeviceId: "hub-foreign" });
+  await expectRejection(
+    fn.run({
+      auth: { uid: "owner-viewer-foreign" },
+      data: { cameraDeviceId: "ipcam-foreign", authorizerDeviceId: "viewer-foreign" },
+    }),
+    "permission-denied"
+  );
+});
+
 test("a null authorizer clears the recorded authorization", async () => {
   await seedOwner("cam-revoke", "owner-revoke");
   await getFirestore()

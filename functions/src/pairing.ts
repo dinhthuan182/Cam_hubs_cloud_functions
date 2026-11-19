@@ -89,7 +89,7 @@ export async function recomputeEditors(db: Firestore, deviceId: string): Promise
     .where("memberDeviceIds", "array-contains", deviceId)
     .where("status", "==", "active");
 
-  return db.runTransaction(async (tx) => {
+  const editors = await db.runTransaction(async (tx) => {
     const [deviceSnap, pairingsSnap] = await Promise.all([tx.get(deviceRef), tx.get(activePairings)]);
     if (!deviceSnap.exists) {
       return undefined;
@@ -113,4 +113,30 @@ export async function recomputeEditors(db: Firestore, deviceId: string): Promise
     tx.update(deviceRef, { editorUserIds: editors });
     return editors;
   });
+  if (editors !== undefined) {
+    await mirrorEditorsToHostedCameras(db, deviceId, editors);
+  }
+  return editors;
+}
+
+export async function mirrorEditorsToHostedCameras(
+  db: Firestore,
+  hostDeviceId: string,
+  editors: string[]
+): Promise<number> {
+  const hubOwner = (await db.collection("devices").doc(hostDeviceId).get()).get("ownerUserId");
+  if (typeof hubOwner !== "string" || hubOwner.length === 0) {
+    return 0;
+  }
+  const hosted = await db.collection("devices").where("hostDeviceId", "==", hostDeviceId).get();
+  const owned = hosted.docs.filter((doc) => doc.get("ownerUserId") === hubOwner);
+  const batchLimit = 400;
+  for (let start = 0; start < owned.length; start += batchLimit) {
+    const batch = db.batch();
+    for (const doc of owned.slice(start, start + batchLimit)) {
+      batch.update(doc.ref, { editorUserIds: editors });
+    }
+    await batch.commit();
+  }
+  return owned.length;
 }

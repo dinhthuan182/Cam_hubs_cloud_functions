@@ -1,4 +1,5 @@
 import { after, before, beforeEach, describe, test } from "node:test";
+import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
@@ -143,6 +144,44 @@ describe("devices", () => {
   test("a paired user reads the camera's device doc and may rename it", async () => {
     await assertSucceeds(getDoc(doc(db(VIEWER_OWNER), "devices", CAM)));
     await assertSucceeds(updateDoc(doc(db(VIEWER_OWNER), "devices", CAM), { displayName: "Kitchen" }));
+  });
+
+  test("a viewer in editorUserIds lists hosted cameras, a stranger cannot read one", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "devices", "ipcam-1"), {
+        ownerUserId: CAM_OWNER,
+        displayName: "Porch",
+        platform: "ipCamera",
+        hostDeviceId: CAM,
+        editorUserIds: [VIEWER_OWNER],
+      });
+    });
+    const hosted = query(
+      collection(db(VIEWER_OWNER), "devices"),
+      where("editorUserIds", "array-contains", VIEWER_OWNER),
+      where("platform", "==", "ipCamera")
+    );
+    const snap = await assertSucceeds(getDocs(hosted));
+    assert.deepEqual(snap.docs.map((d) => d.id), ["ipcam-1"]);
+    await assertFails(getDoc(doc(db(STRANGER), "devices", "ipcam-1")));
+  });
+
+  test("the hub creates a hosted camera but cannot set editorUserIds on it", async () => {
+    const shape = { ownerUserId: CAM_OWNER, displayName: "Porch", platform: "ipCamera", hostDeviceId: CAM };
+    await assertSucceeds(setDoc(doc(db(CAM_OWNER), "devices", "ipcam-2"), shape));
+    await assertFails(
+      setDoc(doc(db(CAM_OWNER), "devices", "ipcam-3"), { ...shape, editorUserIds: [CAM_OWNER, STRANGER] })
+    );
+  });
+
+  test("hostDeviceId must name a hub the creator owns and is immutable afterwards", async () => {
+    const shape = { ownerUserId: STRANGER, displayName: "Forged", platform: "ipCamera" };
+    await assertFails(setDoc(doc(db(STRANGER), "devices", "ipcam-forged"), { ...shape, hostDeviceId: CAM }));
+    await assertFails(setDoc(doc(db(STRANGER), "devices", "ipcam-orphan"), { ...shape, hostDeviceId: "no-such-hub" }));
+    await assertSucceeds(setDoc(doc(db(STRANGER), "devices", "ipcam-own"), { ...shape, hostDeviceId: STRANGER_DEV }));
+    await assertFails(updateDoc(doc(db(STRANGER), "devices", "ipcam-own"), { hostDeviceId: STRANGER_DEV2 }));
+    await assertSucceeds(setDoc(doc(db(STRANGER), "devices", "plain"), shape));
+    await assertFails(updateDoc(doc(db(STRANGER), "devices", "plain"), { hostDeviceId: STRANGER_DEV }));
   });
 
   test("a stranger cannot read a device doc or list devices", async () => {
